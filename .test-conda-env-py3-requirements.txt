@@ -2,4 +2,4 @@ git+https://gitlab.tiker.net/inducer/boxtree@b3e9e17489edf7af47bd192aeeebb393a08
 git+https://github.com/inducer/pymbolic
 git+https://github.com/inducer/loopy
 git+https://gitlab.tiker.net/inducer/sumpy@a90512815de8bce03816bb22659d752cf731704a
-git+https://github.com/inducer/meshmode
+git+https://github.com/inducer/meshmode@44ed963d24b7b2f703e3b9ee9ea24bcee3cac6aa
