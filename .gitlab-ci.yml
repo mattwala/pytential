@@ -77,45 +77,45 @@ Python 3 Intel:
 #     reports:
 #       junit: test/pytest.xml
 
-Python 3 Conda:
-  script:
-  - export SUMPY_FORCE_SYMBOLIC_BACKEND=symengine
-  - export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
-  - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
-  - export REQUIREMENTS_TXT=.test-conda-env-py3-requirements.txt
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
-  - ". ./build-and-test-py-project-within-miniconda.sh"
-  tags:
-  - linux
-  - large-node
-  except:
-  - tags
+# Python 3 Conda:
+#   script:
+#   - export SUMPY_FORCE_SYMBOLIC_BACKEND=symengine
+#   - export CONDA_ENVIRONMENT=.test-conda-env-py3.yml
+#   - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
+#   - export REQUIREMENTS_TXT=.test-conda-env-py3-requirements.txt
+#   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
+#   - ". ./build-and-test-py-project-within-miniconda.sh"
+#   tags:
+#   - linux
+#   - large-node
+#   except:
+#   - tags
+# 
+#   artifacts:
+#     reports:
+#       junit: test/pytest.xml
 
-  artifacts:
-    reports:
-      junit: test/pytest.xml
-
-Python 3 Conda Apple:
-  script:
-  - export LC_ALL=en_US.UTF-8
-  - export LANG=en_US.UTF-8
-  - export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
-  - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
-  - export REQUIREMENTS_TXT=.test-conda-env-py3-requirements.txt
-  - export CC=clang
-  - set -o xtrace
-  - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
-  - ". ./build-and-test-py-project-within-miniconda.sh"
-
-  tags:
-  - apple
-  except:
-  - tags
-  retry: 2
-
-  artifacts:
-    reports:
-      junit: test/pytest.xml
+# Python 3 Conda Apple:
+#   script:
+#   - export LC_ALL=en_US.UTF-8
+#   - export LANG=en_US.UTF-8
+#   - export CONDA_ENVIRONMENT=.test-conda-env-py3-macos.yml
+#   - export PYTEST_ADDOPTS=${PYTEST_ADDOPTS:--k-slowtest}
+#   - export REQUIREMENTS_TXT=.test-conda-env-py3-requirements.txt
+#   - export CC=clang
+#   - set -o xtrace
+#   - curl -L -O -k https://gitlab.tiker.net/inducer/ci-support/raw/master/build-and-test-py-project-within-miniconda.sh
+#   - ". ./build-and-test-py-project-within-miniconda.sh"
+# 
+#   tags:
+#   - apple
+#   except:
+#   - tags
+#   retry: 2
+# 
+#   artifacts:
+#     reports:
+#       junit: test/pytest.xml
 
 Documentation:
   script:
