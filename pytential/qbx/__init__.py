@@ -420,16 +420,16 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     "within a panel.", stacklevel=3)
 
         with cl.CommandQueue(self.cl_context) as queue:
-                return (self._panel_sizes(last_dim_length).with_queue(queue) * 0.5
-                        ).with_queue(None)
+            return (self._panel_sizes(last_dim_length).with_queue(queue) * 0.5
+                    ).with_queue(None)
 
     # _expansion_radii should not be needed for the fine discretization
 
     @memoize_method
     def _close_target_tunnel_radius(self, last_dim_length):
         with cl.CommandQueue(self.cl_context) as queue:
-                return (self._panel_sizes(last_dim_length).with_queue(queue) * 0.5
-                        ).with_queue(None)
+            return (self._panel_sizes(last_dim_length).with_queue(queue) * 0.5
+                    ).with_queue(None)
 
     @memoize_method
     def _panel_sizes(self, last_dim_length="npanels"):
