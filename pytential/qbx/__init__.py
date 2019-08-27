@@ -195,6 +195,7 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
             _expansions_in_tree_have_extent=_not_provided,
             _expansion_stick_out_factor=_not_provided,
             geometry_data_inspector=None,
+            fmm_backend=_not_provided,
 
             debug=_not_provided,
             _refined_for_global_qbx=_not_provided,
@@ -241,6 +242,9 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                 to_refined_connection=(
                     to_refined_connection or self._to_refined_connection),
 
+                fmm_backend=(
+                    fmm_backend if fmm_backend is not _not_provided
+                    else self.fmm_backend),
                 debug=(
                     # False is a valid value here
                     debug if debug is not _not_provided else self.debug),
@@ -267,7 +271,6 @@ class QBXLayerPotentialSource(LayerPotentialSourceBase):
                     self._from_sep_smaller_min_nsources_cumul),
                 geometry_data_inspector=(
                     geometry_data_inspector or self.geometry_data_inspector),
-                fmm_backend=self.fmm_backend,
                 )
 
     # }}}
