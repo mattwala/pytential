@@ -246,22 +246,27 @@ class DynamicTestCase(object):
 
 # {{{ integral identity tester
 
+@pytest.mark.slowtest
 @pytest.mark.parametrize("case", [
-    tc
-    for geom in [
-        StarfishGeometry(),
-        SphereGeometry(),
-        ]
-    for tc in [
-        DynamicTestCase(geom, GreenExpr(), 0),
-        DynamicTestCase(geom, GreenExpr(), 1.2),
-        DynamicTestCase(geom, GradGreenExpr(), 0),
-        DynamicTestCase(geom, GradGreenExpr(), 1.2),
-        DynamicTestCase(geom, ZeroCalderonExpr(), 0),
+        DynamicTestCase(SphereGeometry(), GreenExpr(), 0),
+])
+def test_identity_convergence_slow(ctx_getter, case):
+    test_identity_convergence(ctx_getter, case)
 
-        DynamicTestCase(geom, GreenExpr(), 0, fmm_backend="fmmlib"),
-        DynamicTestCase(geom, GreenExpr(), 1.2, fmm_backend="fmmlib"),
-        ]])
+
+@pytest.mark.parametrize("case", [
+        # 2d
+        DynamicTestCase(StarfishGeometry(), GreenExpr(), 0),
+        DynamicTestCase(StarfishGeometry(), GreenExpr(), 1.2),
+        DynamicTestCase(StarfishGeometry(), GradGreenExpr(), 0),
+        DynamicTestCase(StarfishGeometry(), GradGreenExpr(), 1.2),
+        DynamicTestCase(StarfishGeometry(), ZeroCalderonExpr(), 0),
+        DynamicTestCase(StarfishGeometry(), GreenExpr(), 0, fmm_backend="fmmlib"),
+        DynamicTestCase(StarfishGeometry(), GreenExpr(), 1.2, fmm_backend="fmmlib"),
+        # 3d
+        DynamicTestCase(SphereGeometry(), GreenExpr(), 0, fmm_backend="fmmlib"),
+        DynamicTestCase(SphereGeometry(), GreenExpr(), 1.2, fmm_backend="fmmlib")
+])
 def test_identity_convergence(ctx_getter,  case, visualize=False):
     logging.basicConfig(level=logging.INFO)
 
