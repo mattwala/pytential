@@ -1,4 +1,4 @@
-git+https://gitlab.tiker.net/inducer/boxtree
+git+https://gitlab.tiker.net/inducer/boxtree@b3e9e17489edf7af47bd192aeeebb393a08be189
 git+https://github.com/inducer/pymbolic
 git+https://github.com/inducer/loopy
 git+https://gitlab.tiker.net/inducer/sumpy
