@@ -25,7 +25,6 @@ THE SOFTWARE.
 import numpy as np
 import numpy.linalg as la  # noqa
 
-from boxtree.tools import ConstantOneExpansionWrangler
 import pyopencl as cl
 import pyopencl.clmath  # noqa
 import pytest
@@ -96,70 +95,57 @@ def get_density(queue, lpot_source):
     nodes = density_discr.nodes().with_queue(queue)
     return cl.clmath.sin(10 * nodes[0])
 
-# }}}
 
+def get_slp_cost(queue, lpot_source, k=0):
+    """Return the modeled cost of on-surface evaluation for the single-layer
+    potential."""
 
-# {{{ test that timing data gathering can execute succesfully
+    sym_op_S_extra_kwargs = {}
 
-def test_timing_data_gathering(ctx_getter):
-    """Test that timing data gathering can execute succesfully."""
+    if k == 0:
+        k_sym = LaplaceKernel(lpot_source.ambient_dim)
+    else:
+        k_sym = HelmholtzKernel(lpot_source.ambient_dim, "k")
+        sym_op_S_extra_kwargs["k"] = k
 
-    pytest.importorskip("pyfmmlib")
+    sym_op_S = sym.S(
+            k_sym, sym.var("sigma"), qbx_forced_limit=+1, **sym_op_S_extra_kwargs)
 
-    cl_ctx = ctx_getter()
-    queue = cl.CommandQueue(cl_ctx,
-            properties=cl.command_queue_properties.PROFILING_ENABLE)
+    inspect_geo_data_result = []
 
-    lpot_source = get_lpot_source(queue, 2)
-    sigma = get_density(queue, lpot_source)
+    def inspect_geo_data(insn, bound_expr, geo_data):
+        from pytential.qbx.cost import CostModel
+        cost_model = CostModel()
 
-    sigma_sym = sym.var("sigma")
-    k_sym = LaplaceKernel(lpot_source.ambient_dim)
-    sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
+        kernel = lpot_source.get_fmm_kernel(insn.kernels)
+        kernel_arguments = insn.kernel_arguments
 
+        result = cost_model(geo_data, kernel, kernel_arguments)
+        inspect_geo_data_result.append(result)
+
+        return False
+
+    lpot_source = lpot_source.copy(geometry_data_inspector=inspect_geo_data)
     op_S = bind(lpot_source, sym_op_S)
+    sigma = get_density(queue, lpot_source)
+    op_S(queue, sigma=sigma)
 
-    timing_data = {}
-    op_S.eval(queue, dict(sigma=sigma), timing_data=timing_data)
-    assert timing_data
-    print(timing_data)
+    return inspect_geo_data_result[0]
 
 # }}}
 
 
 # {{{ test cost model
 
-@pytest.mark.parametrize("dim, use_target_specific_qbx", (
-    (2, False),
-    (3, False),
-    (3, True)))
-def test_cost_model(ctx_getter, dim, use_target_specific_qbx):
+@pytest.mark.parametrize("dim", (2, 3))
+def test_cost_model(ctx_getter, dim):
     """Test that cost model gathering can execute successfully."""
     cl_ctx = ctx_getter()
     queue = cl.CommandQueue(cl_ctx)
-
-    lpot_source = (
-            get_lpot_source(queue, dim)
-            .copy(
-                _use_target_specific_qbx=use_target_specific_qbx,
-                cost_model=CostModel()))
-
-    sigma = get_density(queue, lpot_source)
-
-    sigma_sym = sym.var("sigma")
-    k_sym = LaplaceKernel(lpot_source.ambient_dim)
-
-    sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
-    op_S = bind(lpot_source, sym_op_S)
-    cost_S = op_S.get_modeled_cost(queue, sigma=sigma)
-    assert len(cost_S) == 1
-
-    sym_op_S_plus_D = (
-            sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
-            + sym.D(k_sym, sigma_sym))
-    op_S_plus_D = bind(lpot_source, sym_op_S_plus_D)
-    cost_S_plus_D = op_S_plus_D.get_modeled_cost(queue, sigma=sigma)
-    assert len(cost_S_plus_D) == 2
+    lpot_source = get_lpot_source(queue, dim)
+    cost_S = get_slp_cost(queue, lpot_source)
+    from pytential.qbx.cost import ParametrizedCosts
+    assert isinstance(cost_S, ParametrizedCosts)
 
 # }}}
 
@@ -175,19 +161,14 @@ def test_cost_model_metadata_gathering(ctx_getter):
 
     fmm_level_to_order = SimpleExpansionOrderFinder(tol=1e-5)
 
-    lpot_source = get_lpot_source(queue, 2).copy(
+    dim = 2
+    k = 3
+
+    lpot_source = get_lpot_source(queue, dim).copy(
             fmm_level_to_order=fmm_level_to_order)
 
-    sigma = get_density(queue, lpot_source)
-
-    sigma_sym = sym.var("sigma")
-    k_sym = HelmholtzKernel(2, "k")
-    k = 2
-
-    sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1, k=sym.var("k"))
-    op_S = bind(lpot_source, sym_op_S)
-
-    cost_S = one(op_S.get_modeled_cost(queue, sigma=sigma, k=k).values())
+    cost_S = get_slp_cost(queue, lpot_source, k)
+    kernel = HelmholtzKernel(dim, "k")
 
     geo_data = lpot_source.qbx_fmm_geometry_data(
             target_discrs_and_qbx_sides=((lpot_source.density_discr, 1),))
@@ -203,27 +184,48 @@ def test_cost_model_metadata_gathering(ctx_getter):
     for level in range(tree.nlevels):
         assert (
                 cost_S.params["p_fmm_lev%d" % level]
-                == fmm_level_to_order(k_sym, {"k": 2}, tree, level))
+                == fmm_level_to_order(kernel, {"k": k}, tree, level))
 
 # }}}
 
 
 # {{{ constant one wrangler
 
-class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
+def record_op_count(f):
+    def run_and_record_op_count(self, *args):
+        result, op_count = f(self, *args)
+        if f.__name__ in self.op_counts:
+            raise RuntimeError("Would overwrite op count")
+        self.op_counts[f.__name__] = op_count
+        return result
+    return run_and_record_op_count
 
-    def __init__(self, queue, geo_data, use_target_specific_qbx):
-        from pytential.qbx.utils import ToHostTransferredGeoDataWrapper
+
+class OpCountingConstantOneQBXExpansionWrangler(object):
+    # This is based on ConstantOneExpansionWrangler from boxtree.
+
+    def __init__(self, queue, geo_data):
+        from pytential.qbx.fmmlib import ToHostTransferredGeoDataWrapper
         geo_data = ToHostTransferredGeoDataWrapper(queue, geo_data)
 
         self.geo_data = geo_data
         self.trav = geo_data.traversal()
-        self.using_tsqbx = (
-                use_target_specific_qbx
-                # None means use by default if possible
-                or use_target_specific_qbx is None)
+        self.tree = geo_data.tree()
 
-        ConstantOneExpansionWrangler.__init__(self, geo_data.tree())
+        self.op_counts = {}
+
+    def multipole_expansion_zeros(self):
+        return np.zeros(self.tree.nboxes, dtype=np.float64)
+
+    local_expansion_zeros = multipole_expansion_zeros
+
+    def potential_zeros(self):
+        return np.zeros(self.tree.ntargets, dtype=np.float64)
+
+    def _get_source_slice(self, ibox):
+        pstart = self.tree.box_source_starts[ibox]
+        return slice(
+                pstart, pstart + self.tree.box_source_counts_nonchild[ibox])
 
     def _get_target_slice(self, ibox):
         non_qbx_box_target_lists = self.geo_data.non_qbx_box_target_lists()
@@ -243,16 +245,168 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
     def qbx_local_expansion_zeros(self):
         return np.zeros(self.geo_data.ncenters)
 
+    def reorder_sources(self, source_array):
+        return source_array[self.tree.user_source_ids]
+
     def reorder_potentials(self, potentials):
         raise NotImplementedError("reorder_potentials should not "
                 "be called on a QBXExpansionWrangler")
 
+    @record_op_count
+    def form_multipoles(self, level_start_source_box_nrs, source_boxes, src_weights):
+        mpoles = self.multipole_expansion_zeros()
+        ops = 0
+
+        for ibox in source_boxes:
+            pslice = self._get_source_slice(ibox)
+            mpoles[ibox] += np.sum(src_weights[pslice])
+            ops += pslice.stop - pslice.start
+
+        return mpoles, ops
+
+    @record_op_count
+    def coarsen_multipoles(self, level_start_source_parent_box_nrs,
+            source_parent_boxes, mpoles):
+        tree = self.tree
+        ops = 0
+
+        # nlevels-1 is the last valid level index
+        # nlevels-2 is the last valid level that could have children
+        #
+        # 3 is the last relevant source_level.
+        # 2 is the last relevant target_level.
+        # (because no level 1 box will be well-separated from another)
+        for source_level in range(tree.nlevels-1, 2, -1):
+            target_level = source_level - 1
+            start, stop = level_start_source_parent_box_nrs[
+                            target_level:target_level+2]
+            for ibox in source_parent_boxes[start:stop]:
+                for child in tree.box_child_ids[:, ibox]:
+                    if child:
+                        mpoles[ibox] += mpoles[child]
+                        ops += 1
+
+        # Modified mpoles in-place and returns None
+        return None, ops
+
+    @record_op_count
+    def eval_direct(self, target_boxes, neighbor_sources_starts,
+            neighbor_sources_lists, src_weights):
+        pot = self.potential_zeros()
+        ops = 0
+
+        for itgt_box, tgt_ibox in enumerate(target_boxes):
+            tgt_pslice = self._get_target_slice(tgt_ibox)
+
+            src_sum = 0
+            start, end = neighbor_sources_starts[itgt_box:itgt_box+2]
+            #print "DIR: %s <- %s" % (tgt_ibox, neighbor_sources_lists[start:end])
+            nsrcs = 0
+            for src_ibox in neighbor_sources_lists[start:end]:
+                src_pslice = self._get_source_slice(src_ibox)
+                src_sum += np.sum(src_weights[src_pslice])
+                nsrcs += src_pslice.stop - src_pslice.start
+
+            pot[tgt_pslice] = src_sum
+            ops += pot[tgt_pslice].size * nsrcs
+
+        return pot, ops
+
+    @record_op_count
+    def multipole_to_local(self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes,
+            starts, lists, mpole_exps):
+        local_exps = self.local_expansion_zeros()
+        ops = 0
+
+        for itgt_box, tgt_ibox in enumerate(target_or_target_parent_boxes):
+            start, end = starts[itgt_box:itgt_box+2]
+
+            contrib = 0
+            #print tgt_ibox, "<-", lists[start:end]
+            for src_ibox in lists[start:end]:
+                contrib += mpole_exps[src_ibox]
+                ops += 1
+
+            local_exps[tgt_ibox] += contrib
+
+        return local_exps, ops
+
+    @record_op_count
+    def eval_multipoles(self, level_start_target_box_nrs, target_boxes,
+            from_sep_smaller_nonsiblings_by_level, mpole_exps):
+        pot = self.potential_zeros()
+        ops = 0
+
+        for ssn in from_sep_smaller_nonsiblings_by_level:
+            for itgt_box, tgt_ibox in enumerate(target_boxes):
+                tgt_pslice = self._get_target_slice(tgt_ibox)
+
+                contrib = 0
+
+                start, end = ssn.starts[itgt_box:itgt_box+2]
+                nsrcs = 0
+                for src_ibox in ssn.lists[start:end]:
+                    contrib += mpole_exps[src_ibox]
+                    nsrcs += 1
+
+                pot[tgt_pslice] += contrib
+                ops += pot[tgt_pslice].size * nsrcs
+
+        return pot, ops
+
+    @record_op_count
+    def form_locals(self,
+            level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes, starts, lists, src_weights):
+        local_exps = self.local_expansion_zeros()
+        ops = 0
+
+        for itgt_box, tgt_ibox in enumerate(target_or_target_parent_boxes):
+            start, end = starts[itgt_box:itgt_box+2]
+
+            #print "LIST 4", tgt_ibox, "<-", lists[start:end]
+            contrib = 0
+            for src_ibox in lists[start:end]:
+                src_pslice = self._get_source_slice(src_ibox)
+                contrib += np.sum(src_weights[src_pslice])
+                ops += src_pslice.stop - src_pslice.start
+
+            local_exps[tgt_ibox] += contrib
+
+        return local_exps, ops
+
+    @record_op_count
+    def refine_locals(self, level_start_target_or_target_parent_box_nrs,
+            target_or_target_parent_boxes, local_exps):
+        ops = 0
+
+        for target_lev in range(1, self.tree.nlevels):
+            start, stop = level_start_target_or_target_parent_box_nrs[
+                    target_lev:target_lev+2]
+            for ibox in target_or_target_parent_boxes[start:stop]:
+                local_exps[ibox] += local_exps[self.tree.box_parent_ids[ibox]]
+                ops += 1
+
+        return local_exps, ops
+
+    @record_op_count
+    def eval_locals(self, level_start_target_box_nrs, target_boxes, local_exps):
+        pot = self.potential_zeros()
+        ops = 0
+
+        for ibox in target_boxes:
+            tgt_pslice = self._get_target_slice(ibox)
+            pot[tgt_pslice] += local_exps[ibox]
+            ops += pot[tgt_pslice].size
+
+        return pot, ops
+
+    @record_op_count
     def form_global_qbx_locals(self, src_weights):
         local_exps = self.qbx_local_expansion_zeros()
         ops = 0
-
-        if self.using_tsqbx:
-            return local_exps, self.timing_future(ops)
 
         global_qbx_centers = self.geo_data.global_qbx_centers()
         qbx_center_to_target_box = self.geo_data.qbx_center_to_target_box()
@@ -271,20 +425,19 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
 
             local_exps[tgt_icenter] = src_sum
 
-        return local_exps, self.timing_future(ops)
+        return local_exps, ops
 
+    @record_op_count
     def translate_box_multipoles_to_qbx_local(self, multipole_exps):
         local_exps = self.qbx_local_expansion_zeros()
         ops = 0
 
         global_qbx_centers = self.geo_data.global_qbx_centers()
+        qbx_center_to_target_box = self.geo_data.qbx_center_to_target_box()
 
         for isrc_level, ssn in enumerate(self.trav.from_sep_smaller_by_level):
             for tgt_icenter in global_qbx_centers:
-                icontaining_tgt_box = (
-                        self.geo_data
-                        .qbx_center_to_target_box_source_level(isrc_level)
-                        [tgt_icenter])
+                icontaining_tgt_box = qbx_center_to_target_box[tgt_icenter]
 
                 if icontaining_tgt_box == -1:
                     continue
@@ -297,8 +450,9 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
                     local_exps[tgt_icenter] += multipole_exps[src_ibox]
                     ops += 1
 
-        return local_exps, self.timing_future(ops)
+        return local_exps, ops
 
+    @record_op_count
     def translate_box_local_to_qbx_local(self, local_exps):
         qbx_expansions = self.qbx_local_expansion_zeros()
         ops = 0
@@ -312,8 +466,9 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
             qbx_expansions[tgt_icenter] += local_exps[src_ibox]
             ops += 1
 
-        return qbx_expansions, self.timing_future(ops)
+        return qbx_expansions, ops
 
+    @record_op_count
     def eval_qbx_expansions(self, qbx_expansions):
         output = self.full_output_zeros()
         ops = 0
@@ -329,41 +484,10 @@ class ConstantOneQBXExpansionWrangler(ConstantOneExpansionWrangler):
                 output[0][center_itgt] += qbx_expansions[src_icenter]
                 ops += 1
 
-        return output, self.timing_future(ops)
+        return output, ops
 
-    def eval_target_specific_qbx_locals(self, src_weights):
-        pot = self.full_output_zeros()
-        ops = 0
-
-        if not self.using_tsqbx:
-            return pot, self.timing_future(ops)
-
-        global_qbx_centers = self.geo_data.global_qbx_centers()
-        center_to_tree_targets = self.geo_data.center_to_tree_targets()
-        qbx_center_to_target_box = self.geo_data.qbx_center_to_target_box()
-
-        for ictr in global_qbx_centers:
-            tgt_ibox = qbx_center_to_target_box[ictr]
-
-            ictr_tgt_start, ictr_tgt_end = center_to_tree_targets.starts[ictr:ictr+2]
-
-            for ictr_tgt in range(ictr_tgt_start, ictr_tgt_end):
-                ctr_itgt = center_to_tree_targets.lists[ictr_tgt]
-
-                isrc_box_start, isrc_box_end = (
-                        self.trav.neighbor_source_boxes_starts[tgt_ibox:tgt_ibox+2])
-
-                for isrc_box in range(isrc_box_start, isrc_box_end):
-                    src_ibox = self.trav.neighbor_source_boxes_lists[isrc_box]
-
-                    isrc_start = self.tree.box_source_starts[src_ibox]
-                    isrc_end = (isrc_start
-                            + self.tree.box_source_counts_nonchild[src_ibox])
-
-                    pot[0][ctr_itgt] += sum(src_weights[isrc_start:isrc_end])
-                    ops += isrc_end - isrc_start
-
-        return pot, self.timing_future(ops)
+    def finalize_potentials(self, potentials):
+        return potentials
 
 # }}}
 
@@ -402,15 +526,24 @@ class OpCountingTranslationCostModel(object):
     m2l = m2m
 
 
-@pytest.mark.parametrize("dim, off_surface, use_target_specific_qbx", (
-        (2, False, False),
-        (2, True,  False),
-        (3, False, False),
-        (3, False, True),
-        (3, True,  False),
-        (3, True,  True)))
-def test_cost_model_correctness(ctx_getter, dim, off_surface,
-        use_target_specific_qbx):
+STAGES = (
+        "form_multipoles",
+        "coarsen_multipoles",
+        "eval_direct",
+        "multipole_to_local",
+        "eval_multipoles",
+        "form_locals",
+        "refine_locals",
+        "eval_locals",
+        "form_global_qbx_locals",
+        "translate_box_local_to_qbx_local",
+        "eval_qbx_expansions",
+)
+
+
+@pytest.mark.parametrize("dim", (2, 3))
+@pytest.mark.parametrize("off_surface", (True, False))
+def test_cost_model_correctness(ctx_getter, dim, off_surface):
     """Check that computed cost matches that of a constant-one FMM."""
     cl_ctx = ctx_getter()
     queue = cl.CommandQueue(cl_ctx)
@@ -419,9 +552,7 @@ def test_cost_model_correctness(ctx_getter, dim, off_surface,
             CostModel(
                 translation_cost_model_factory=OpCountingTranslationCostModel))
 
-    lpot_source = get_lpot_source(queue, dim).copy(
-            cost_model=cost_model,
-            _use_target_specific_qbx=use_target_specific_qbx)
+    lpot_source = get_lpot_source(queue, dim)
 
     # Construct targets.
     if off_surface:
@@ -432,21 +563,34 @@ def test_cost_model_correctness(ctx_getter, dim, off_surface,
                 make_uniform_particle_array(queue, ntargets, dim, np.float))
         target_discrs_and_qbx_sides = ((targets, 0),)
         qbx_forced_limit = None
+
     else:
         targets = lpot_source.density_discr
         target_discrs_and_qbx_sides = ((targets, 1),)
         qbx_forced_limit = 1
 
-    # Construct bound op, run cost model.
+    # Run cost model for SLP.
     sigma_sym = sym.var("sigma")
     k_sym = LaplaceKernel(lpot_source.ambient_dim)
     sym_op_S = sym.S(k_sym, sigma_sym, qbx_forced_limit=qbx_forced_limit)
 
+    inspect_geo_data_result = []
+
+    def inspect_geo_data(insn, bound_expr, geo_data):
+        kernel = lpot_source.get_fmm_kernel(insn.kernels)
+        kernel_arguments = insn.kernel_arguments
+
+        result = cost_model(geo_data, kernel, kernel_arguments)
+        inspect_geo_data_result.append(result)
+
+        return False
+
+    lpot_source = lpot_source.copy(geometry_data_inspector=inspect_geo_data)
+
     op_S = bind((lpot_source, targets), sym_op_S)
     sigma = get_density(queue, lpot_source)
-
-    from pytools import one
-    cost_S = one(op_S.get_modeled_cost(queue, sigma=sigma).values())
+    op_S(queue, sigma=sigma)
+    cost_S = inspect_geo_data_result[0]
 
     # Run FMM with ConstantOneWrangler. This can't be done with pytential's
     # high-level interface, so call the FMM driver directly.
@@ -454,27 +598,25 @@ def test_cost_model_correctness(ctx_getter, dim, off_surface,
     geo_data = lpot_source.qbx_fmm_geometry_data(
             target_discrs_and_qbx_sides=target_discrs_and_qbx_sides)
 
-    wrangler = ConstantOneQBXExpansionWrangler(
-            queue, geo_data, use_target_specific_qbx)
+    wrangler = OpCountingConstantOneQBXExpansionWrangler(queue, geo_data)
     nnodes = lpot_source.quad_stage2_density_discr.nnodes
     src_weights = np.ones(nnodes)
 
-    timing_data = {}
-    potential = drive_fmm(wrangler, src_weights, timing_data,
-            traversal=wrangler.trav)[0][geo_data.ncenters:]
+    potential = drive_fmm(wrangler, src_weights)[geo_data.ncenters:]
 
     # Check constant one wrangler for correctness.
     assert (potential == nnodes).all()
 
+    op_counts = wrangler.op_counts
     modeled_time = cost_S.get_predicted_times(merge_close_lists=True)
 
     # Check that the cost model matches the timing data returned by the
     # constant one wrangler.
     mismatches = []
-    for stage in timing_data:
-        if timing_data[stage]["ops_elapsed"] != modeled_time[stage]:
+    for stage in STAGES:
+        if op_counts.get(stage, 0) != modeled_time[stage]:
             mismatches.append(
-                    (stage, timing_data[stage]["ops_elapsed"], modeled_time[stage]))
+                    (stage, op_counts.get(stage, 0), modeled_time[stage]))
 
     assert not mismatches, "\n".join(str(s) for s in mismatches)
 
@@ -496,7 +638,6 @@ CONSTANT_ONE_PARAMS = dict(
         c_p2p=1,
         c_p2qbxl=1,
         c_qbxl2p=1,
-        c_p2p_tsqbx=1,
         )
 
 
@@ -514,20 +655,11 @@ def test_cost_model_order_varying_by_level(ctx_getter):
         return 1
 
     lpot_source = get_lpot_source(queue, 2).copy(
-            cost_model=CostModel(
-                calibration_params=CONSTANT_ONE_PARAMS),
             fmm_level_to_order=level_to_order_constant)
 
-    sigma_sym = sym.var("sigma")
-
-    k_sym = LaplaceKernel(2)
-    sym_op = sym.S(k_sym, sigma_sym, qbx_forced_limit=+1)
-
-    sigma = get_density(queue, lpot_source)
-
-    cost_constant = one(
-            bind(lpot_source, sym_op)
-            .get_modeled_cost(queue, sigma=sigma).values())
+    cost_constant = (
+            get_slp_cost(queue, lpot_source)
+            .with_params(CONSTANT_ONE_PARAMS))
 
     # }}}
 

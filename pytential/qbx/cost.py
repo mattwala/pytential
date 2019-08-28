@@ -441,11 +441,11 @@ class CostModel(object):
 
         assert tree.nlevels == len(traversal.from_sep_smaller_by_level)
 
-        for ilevel, sep_smaller_list in enumerate(
-                traversal.from_sep_smaller_by_level):
-            for itgt_box, tgt_ibox in enumerate(
-                        traversal.target_boxes_sep_smaller_by_source_level[ilevel]):
-                ntargets = box_target_counts_nonchild[tgt_ibox]
+        for itgt_box, tgt_ibox in enumerate(traversal.target_boxes):
+            ntargets = box_target_counts_nonchild[tgt_ibox]
+
+            for ilevel, sep_smaller_list in enumerate(
+                    traversal.from_sep_smaller_by_level):
                 start, end = sep_smaller_list.starts[itgt_box:itgt_box+2]
                 nmp_eval_by_source_level[ilevel] += ntargets * (end-start)
 
@@ -602,24 +602,21 @@ class CostModel(object):
     # {{{ translate from list 3 multipoles to qbx local expansions
 
     def process_m2qbxl(self, xlat_cost, traversal, tree, global_qbx_centers,
-            qbx_center_to_target_box_source_level):
+            qbx_center_to_target_box):
         nm2qbxl_by_source_level = np.zeros(tree.nlevels, dtype=np.intp)
 
         assert tree.nlevels == len(traversal.from_sep_smaller_by_level)
 
-        for isrc_level, ssn in enumerate(traversal.from_sep_smaller_by_level):
-            for tgt_icenter in global_qbx_centers:
-                icontaining_tgt_box = qbx_center_to_target_box_source_level[
-                        isrc_level][tgt_icenter]
+        for tgt_icenter in global_qbx_centers:
+            itgt_box = qbx_center_to_target_box[tgt_icenter]
 
-                if icontaining_tgt_box == -1:
-                    continue
+            if itgt_box == -1:
+                continue
 
-                start, stop = (
-                        ssn.starts[icontaining_tgt_box],
-                        ssn.starts[icontaining_tgt_box+1])
-
-                nm2qbxl_by_source_level[isrc_level] += stop-start
+            for ilevel, sep_smaller_list in enumerate(
+                    traversal.from_sep_smaller_by_level):
+                start, end = sep_smaller_list.starts[itgt_box:itgt_box+2]
+                nm2qbxl_by_source_level[ilevel] += end - start
 
         result = sum(
                 cost * xlat_cost.m2qbxl(ilevel)
@@ -666,7 +663,7 @@ class CostModel(object):
     # }}}
 
     @log_process(logger, "model cost")
-    def __call__(self, wrangler, geo_data, kernel, kernel_arguments):
+    def __call__(self, geo_data, kernel, kernel_arguments):
         """Analyze the given geometry and return cost data.
 
         :returns: An instance of :class:`ParametrizedCosts`.
@@ -691,9 +688,6 @@ class CostModel(object):
                 p_qbx=lpot_source.qbx_order,
                 )
 
-        # FIXME: We can avoid using *kernel* and *kernel_arguments* if we talk
-        # to the wrangler to obtain the FMM order (see also
-        # https://gitlab.tiker.net/inducer/boxtree/issues/25)
         for ilevel in range(tree.nlevels):
             params["p_fmm_lev%d" % ilevel] = (
                     lpot_source.fmm_level_to_order(
@@ -762,12 +756,6 @@ class CostModel(object):
 
         qbx_center_to_target_box = geo_data.qbx_center_to_target_box()
         center_to_targets_starts = geo_data.center_to_tree_targets().starts
-        qbx_center_to_target_box_source_level = np.empty(
-                (tree.nlevels,), dtype=object)
-
-        for src_level in range(tree.nlevels):
-            qbx_center_to_target_box_source_level[src_level] = (
-                    geo_data.qbx_center_to_target_box_source_level(src_level))
 
         with cl.CommandQueue(geo_data.cl_context) as queue:
             global_qbx_centers = global_qbx_centers.get(
@@ -776,28 +764,15 @@ class CostModel(object):
                     queue=queue)
             center_to_targets_starts = center_to_targets_starts.get(
                     queue=queue)
-            for src_level in range(tree.nlevels):
-                qbx_center_to_target_box_source_level[src_level] = (
-                        qbx_center_to_target_box_source_level[src_level]
-                        .get(queue=queue))
 
-        # {{{ form global qbx locals or evaluate target specific qbx expansions
+        # {{{ form global qbx locals
 
-        if wrangler.using_tsqbx:
-            result.update(self.process_eval_target_specific_qbxl(
-                    xlat_cost, direct_interaction_data, global_qbx_centers,
-                    qbx_center_to_target_box, center_to_targets_starts))
-            result["form_global_qbx_locals_list1"] = 0
-            result["form_global_qbx_locals_list3"] = 0
-            result["form_global_qbx_locals_list4"] = 0
-
-        else:
-            result.update(self.process_form_qbxl(
-                    xlat_cost, direct_interaction_data, global_qbx_centers,
-                    qbx_center_to_target_box, center_to_targets_starts))
-            result["eval_target_specific_qbx_locals_list1"] = 0
-            result["eval_target_specific_qbx_locals_list3"] = 0
-            result["eval_target_specific_qbx_locals_list4"] = 0
+        result.update(self.process_form_qbxl(
+                xlat_cost, direct_interaction_data, global_qbx_centers,
+                qbx_center_to_target_box, center_to_targets_starts))
+        result["eval_target_specific_qbx_locals_list1"] = 0
+        result["eval_target_specific_qbx_locals_list3"] = 0
+        result["eval_target_specific_qbx_locals_list4"] = 0
 
         # }}}
 
@@ -805,7 +780,7 @@ class CostModel(object):
 
         result.update(self.process_m2qbxl(
                 xlat_cost, traversal, tree, global_qbx_centers,
-                qbx_center_to_target_box_source_level))
+                qbx_center_to_target_box))
 
         # }}}
 
