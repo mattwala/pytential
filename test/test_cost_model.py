@@ -31,7 +31,6 @@ import pytest
 from pyopencl.tools import (  # noqa
         pytest_generate_tests_for_pyopencl as pytest_generate_tests)
 
-from pytools import one
 from sumpy.kernel import LaplaceKernel, HelmholtzKernel
 
 from pytential import bind, sym, norm  # noqa
