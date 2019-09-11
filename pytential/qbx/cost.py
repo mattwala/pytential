@@ -554,30 +554,6 @@ class CostModel(object):
 
     # }}}
 
-    # {{{ eval target specific qbx expansions
-
-    def process_eval_target_specific_qbxl(self, xlat_cost, direct_interaction_data,
-            global_qbx_centers, qbx_center_to_target_box, center_to_targets_starts):
-
-        counts = self._collect_qbxl_direct_interaction_data(
-                direct_interaction_data, global_qbx_centers,
-                qbx_center_to_target_box, center_to_targets_starts)
-
-        result = {}
-        result["eval_target_specific_qbx_locals_list1"] = (
-                sum(counts["np2qbxl_list1_by_center"] * counts["nqbxl2p_by_center"])
-                * xlat_cost.p2p_tsqbx())
-        result["eval_target_specific_qbx_locals_list3"] = (
-                sum(counts["np2qbxl_list3_by_center"] * counts["nqbxl2p_by_center"])
-                * xlat_cost.p2p_tsqbx())
-        result["eval_target_specific_qbx_locals_list4"] = (
-                sum(counts["np2qbxl_list4_by_center"] * counts["nqbxl2p_by_center"])
-                * xlat_cost.p2p_tsqbx())
-
-        return result
-
-    # }}}
-
     # {{{ form global qbx locals
 
     def process_form_qbxl(self, xlat_cost, direct_interaction_data,
@@ -770,9 +746,6 @@ class CostModel(object):
         result.update(self.process_form_qbxl(
                 xlat_cost, direct_interaction_data, global_qbx_centers,
                 qbx_center_to_target_box, center_to_targets_starts))
-        result["eval_target_specific_qbx_locals_list1"] = 0
-        result["eval_target_specific_qbx_locals_list3"] = 0
-        result["eval_target_specific_qbx_locals_list4"] = 0
 
         # }}}
 
@@ -845,7 +818,6 @@ _FMM_STAGE_TO_CALIBRATION_PARAMETER = {
         "translate_box_multipoles_to_qbx_local": "c_m2qbxl",
         "translate_box_local_to_qbx_local": "c_l2qbxl",
         "eval_qbx_expansions": "c_qbxl2p",
-        "eval_target_specific_qbx_locals": "c_p2p_tsqbx",
         }
 
 

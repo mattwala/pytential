@@ -504,7 +504,6 @@ class OpCountingTranslationCostModel(object):
         return 1
 
     p2qbxl = direct
-    p2p_tsqbx = direct
     qbxl2p = direct
 
     @staticmethod
