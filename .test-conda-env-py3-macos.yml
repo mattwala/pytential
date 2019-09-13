@@ -19,8 +19,9 @@ dependencies:
 
 - pip
 - pip:
-    - git+https://gitlab.tiker.net/mattwala/sumpy@fix-cost-model-for-2d-paper-code-v2
-    - git+https://gitlab.tiker.net/mattwala/boxtree@fix-cost-model-for-2d-paper-code-v2
     - git+https://github.com/inducer/pymbolic
-    - git+https://github.com/inducer/meshmode
     - git+https://github.com/inducer/loopy
+    - git+https://github.com/inducer/meshmode
+    - git+https://gitlab.tiker.net/mattwala/boxtree@fix-cost-model-for-2d-paper-code-v2    
+    - git+https://gitlab.tiker.net/mattwala/sumpy@fix-cost-model-for-2d-paper-code-v2
+
